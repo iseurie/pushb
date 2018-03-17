@@ -128,7 +128,7 @@ if __name__ == "__main__":
                             urlparse(rider)
                         except Exception as what:
                             sys.stderr.write(
-                                "Invalid netloc in argument position #{}: {}\n"
+                                "Invalid URI in argument position #{}: {}\n"
                                 .format(i, what))
                             continue
                         push.update({'type': 'link',
