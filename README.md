@@ -7,7 +7,7 @@ Simple PushBullet command-line tool I wrote to push ephemerals between various r
 
 #### Positional arguments
 ```
-rider :: pathname | netloc + path part of HTTPS URI | full absolute URI
+rider   :: pathname | netloc + path part of HTTPS URI | full absolute URI
 tagspec :: <title>:<message>[:rider]
 ```
 - `<integer>`: Must be first positional argument. Implies retrieval for the execution instance. Specifies a count of pushes to retrieve.
