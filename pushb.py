@@ -33,7 +33,8 @@ async def upload_file(api_key, session, path):
     fields = {'file_name': fname,
               'file_type': '*/*'}
     got = await session.get(api_root + 'upload-request',
-                            headers={'Access-Token': api_key},
+                            headers={'Access-Token': api_key,
+                                     'Content-Type': 'application/json'},
                             data=dumps(fields))
     payload = await got.json()
     await session.post(payload['upload_url'],
@@ -52,13 +53,14 @@ async def mkpush(api_key, session, **kwargs):
 
 
 async def push_file(api_key, session, path, **kwargs):
-    fparams = await upload_file(session, path)
+    fparams = await upload_file(api_key, session, path)
     mkpush(api_key, session, fparams, type='file')
 
 
 if __name__ == "__main__":
     curlp = __flag('-F', '--no-files')
     verbose = __flag('-v', '--verbose')
+    stdin_rd = __flag('-', None)
     API_KEY = os.environ.get('PUSHB_API_KEY')
 
     if API_KEY is None:
@@ -66,7 +68,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     entries = ' '.join(sys.argv[1:])
-    if '-' in sys.argv:
+    if stdin_rd:
         entries += sys.stdin.read()
     entries = entries.split(',')
     entries = map(str.strip, entries)
@@ -119,12 +121,17 @@ if __name__ == "__main__":
             elif len(articles) == 3:
                 # tagged file or url
                 title, body, rider = articles
+            else:
+                sys.stderr.write("Invalid tagspec (position #{})\n"
+                                 .format(i + 1))
+                continue
 
             push.update({'title': title,
                          'body': body})
             if rider is not None:
                 if os.path.exists(rider):
-                    push_file(rider)
+                    pushfuts.append(push_file(API_KEY, session, rider))
+                    continue
                 else:
                     if len(rider.split('://', 1)) != 2:
                         rider = 'https://' + rider
