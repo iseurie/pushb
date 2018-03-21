@@ -7,8 +7,7 @@ import asyncio
 import aiohttp
 import aiofiles
 from json import dumps
-from functools import partial, reduce
-from operator import add
+from functools import partial
 
 api_root = 'https://api.pushbullet.com/v2/'
 
@@ -17,6 +16,7 @@ async def curl_file(session, path, uri):
     fp = aiofiles.open(path, mode='w')
     got = await session.get(uri, headers={'Access-Token': API_KEY})
     await fp.write(await got.read())
+    got.close()
 
 
 def __flag(brief: str, full: str) -> bool:
@@ -28,21 +28,6 @@ def __flag(brief: str, full: str) -> bool:
     return do_rm
 
 
-async def upload_file(api_key, session, path):
-    fname = os.path.basename(path)
-    fields = {'file_name': fname,
-              'file_type': '*/*'}
-    got = await session.get(api_root + 'upload-request',
-                            headers={'Access-Token': api_key,
-                                     'Content-Type': 'application/json'},
-                            data=dumps(fields))
-    payload = await got.json()
-    await session.post(payload['upload_url'],
-                       data={fname: aiofiles.open(path, 'rb')})
-    payload.pop('upload_url')
-    return payload
-
-
 async def mkpush(api_key, session, **kwargs):
     push = kwargs
     resp = await session.post(api_root + 'pushes',
@@ -52,9 +37,28 @@ async def mkpush(api_key, session, **kwargs):
     resp.close()
 
 
+async def upload_file(api_key, session, path):
+    fname = os.path.basename(path)
+    fields = {'file_name': fname,
+              'file_type': '*/*'}
+    got = await session.post(api_root + 'upload-request',
+                             headers={'Access-Token': api_key,
+                                      'Content-Type': 'application/json'},
+                             data=dumps(fields))
+    payload = await got.json()
+    uluri = payload.pop('upload_url')
+    fp = aiofiles.open(path, 'rb')
+    (await session.post(uluri, data={fname: fp})).close()
+    return payload
+
+
 async def push_file(api_key, session, path, **kwargs):
     fparams = await upload_file(api_key, session, path)
-    mkpush(api_key, session, fparams, type='file')
+    fparams['type'] = 'file'
+    keys = ('type', 'file_type', 'file_name', 'file_url')
+    fparams = {k if k in keys else None: v for (k, v) in fparams.items()}
+    del fparams[None]
+    await mkpush(api_key, session, **fparams)
 
 
 if __name__ == "__main__":
@@ -71,17 +75,16 @@ if __name__ == "__main__":
     if stdin_rd:
         entries += sys.stdin.read()
     entries = entries.split(',')
-    entries = map(str.strip, entries)
-    try:
-        retrieval_limit = int(entries[0])
-    except IndexError:
-        uploading = False
-        retrieval_limit = 1
-    except Exception:
-        # cannot be parsed as an integer!
-        uploading = True
+    entries = list(map(str.strip, entries))
 
-    if not uploading:
+    try:
+        retrieval_limit = int(sys.argv[1])
+    except IndexError:
+        retrieval_limit = 1
+    except ValueError:
+        retrieval_limit = None
+
+    if retrieval_limit is not None:
         got = requests.get(api_root + 'pushes',
                            params={'limit': retrieval_limit},
                            headers={'Access-Token': API_KEY})
@@ -92,6 +95,7 @@ if __name__ == "__main__":
                      'note': '{title}: {body}',
                      'file': '{file_name}'}
 
+        session = None
         for push in pushes:
             push['body'] = push.get('body', '')
             push['title'] = push.get('title', '')
@@ -100,12 +104,15 @@ if __name__ == "__main__":
             else:
                 print(dumps(push))
             if curlp and push['type'] == 'file':
+                if session is None:
+                    session = aiohttp.ClientSession()
                 to_curl = (map(lambda x: push[x],
                                ('file_name', 'file_url')))
-                with aiohttp.ClientSession() as session:
-                    curlfuts = asyncio.gather(map(partial(curl_file, session),
-                                                  *to_curl))
-                    asyncio.get_event_loop().run_until_complete(curlfuts)
+                curlfuts = asyncio.gather(map(partial(curl_file, session),
+                                              *to_curl))
+                asyncio.get_event_loop().run_until_complete(curlfuts)
+        if session is not None:
+            session.close()
     else:
         from urllib.parse import urlparse
         pushfuts = []
@@ -122,7 +129,7 @@ if __name__ == "__main__":
                 # tagged file or url
                 title, body, rider = articles
             else:
-                sys.stderr.write("Invalid tagspec (position #{})\n"
+                sys.stderr.write("Invalid tagspec in argument position #{}\n"
                                  .format(i + 1))
                 continue
 
@@ -141,7 +148,7 @@ if __name__ == "__main__":
                                      'url': rider})
                     except Exception:
                         emsg = "Invalid linkspec in argument position #{}\n"
-                        sys.stderr.write(emsg.format(i))
+                        sys.stderr.write(emsg.format(i + 1))
                         sys.exit(1)
             pushfuts.append(mkpush(API_KEY, session, **push))
         final = asyncio.gather(*pushfuts)
