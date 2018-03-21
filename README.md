@@ -1,4 +1,4 @@
-Simple PushBullet command-line tool I wrote to push ephemerals between various roadwarrior clients, workstations, browser-hosted extensions, and other clients.
+Simple PushBullet command-line tool I wrote to push ephemerals between various roadwarrior devices, workstations, browser-hosted extensions, and other clients.
 
 ### Options
 
