@@ -1,4 +1,4 @@
-Simple PushBullet command-line tool I wrote to push things to and from my phone.
+Simple PushBullet command-line tool I wrote to push ephemerals between various roadwarrior clients, workstations, browser-hosted extensions, and other clients.
 
 ### Options
 
@@ -6,6 +6,10 @@ Simple PushBullet command-line tool I wrote to push things to and from my phone.
 - `-F | --no-files`: Causes the client not to download any pushes.
 
 #### Positional arguments
-
+```
+rider :: pathname | netloc + path part of HTTPS URI | full absolute URI
+tagspec :: <title>:<message>[:rider]
+```
 1. `<integer> | u`: Either specifies a count of pushes to retrieve, or specifies that the rest of the positional arguments are upload specifications
-  - `<title>:<message>[:rider]`: Specifies either a new `note` push to be uploaded or a new `file` or `link` push, depending on whether `rider` is a valid hostname and path, for which the default URI scheme will be HTTP, some other kind of URL, or a path on the filesystem.
+  - `<tagspec>[, <tagspec>...]`: Pushes from the command-line by parsing from the syntax outlined above.
+	- `-`: Signals that `tagspec`s should be read from stdin.

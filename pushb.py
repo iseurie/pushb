@@ -7,20 +7,10 @@ import asyncio
 import aiohttp
 import aiofiles
 from json import dumps
+from functools import partial, reduce
+from operator import add
 
 api_root = 'https://api.pushbullet.com/v2/'
-
-
-def rdcount():
-    try:
-        n = int(sys.argv[1])
-        sys.argv = [sys.argv[0]] + sys.argv[2:]
-        return n
-    except IndexError:
-        return 1
-    except ValueError:
-        sys.stderr.write('Count must be an integer\n')
-        sys.exit(1)
 
 
 async def curl_file(session, path, uri):
@@ -53,11 +43,12 @@ async def upload_file(api_key, session, path):
 
 
 async def mkpush(api_key, session, **kwargs):
-    push = {}
-    push.update(**kwargs)
-    return await session.post(api_root + 'pushes',
-                              headers={'Access-Token': api_key},
+    push = kwargs
+    resp = await session.post(api_root + 'pushes',
+                              headers={'Access-Token': api_key,
+                                       'Content-Type': 'application/json'},
                               data=dumps(push))
+    resp.close()
 
 
 async def push_file(api_key, session, path, **kwargs):
@@ -74,11 +65,23 @@ if __name__ == "__main__":
         sys.stderr.write("please specify `PUSHB_API_KEY`\n")
         sys.exit(1)
 
-    firstarg = sys.argv[1] if len(sys.argv) > 1 else None
-    sys.argv = sys.argv[0] + sys.argv[2:]
-    if not firstarg == 'upload' or firstarg == 'u':
+    entries = ' '.join(sys.argv[1:])
+    if '-' in sys.argv:
+        entries += sys.stdin.read()
+    entries = entries.split(',')
+    entries = map(str.strip, entries)
+    try:
+        retrieval_limit = int(entries[0])
+    except IndexError:
+        uploading = False
+        retrieval_limit = 1
+    except Exception:
+        # cannot be parsed as an integer!
+        uploading = True
+
+    if not uploading:
         got = requests.get(api_root + 'pushes',
-                           params={'limit': rdcount()},
+                           params={'limit': retrieval_limit},
                            headers={'Access-Token': API_KEY})
 
         pushes = got.json()['pushes']
@@ -98,42 +101,42 @@ if __name__ == "__main__":
                 to_curl = (map(lambda x: push[x],
                                ('file_name', 'file_url')))
                 with aiohttp.ClientSession() as session:
-                    curlfuts = asyncio.gather(curl_file(session, **to_curl))
-                    task = asyncio.Task(curlfuts)
-                    asyncio.get_event_loop().create_task(asyncio.Task(curlfuts))
+                    curlfuts = asyncio.gather(map(partial(curl_file, session),
+                                                  *to_curl))
+                    asyncio.get_event_loop().run_until_complete(curlfuts)
     else:
         from urllib.parse import urlparse
-        with aiohttp.ClientSession() as session:
-            for i, arg in enumerate(sys.argv[2:]):
-                articles = arg.split(':', 3)
-                if len(articles) == 1:
-                    rider = articles
-                    title = body = ''
-                if len(articles) == 2:
-                    title, body = articles
-                    rider = None
-                elif len(articles) == 3:
-                    # tagged file or url
-                    title, body, rider = articles
+        pushfuts = []
+        session = aiohttp.ClientSession()
+        for i, arg in enumerate(entries):
+            push = {}
+            articles = arg.split(':', 3)
+            if len(articles) == 2:
+                # textual note
+                title, body = articles
+                push.update({'type': 'note'})
+                rider = None
+            elif len(articles) == 3:
+                # tagged file or url
+                title, body, rider = articles
 
-                push = {'title': title,
-                        'body': body}
-                if rider != None:
-                    if os.path.exists(rider):
-                        push_file(rider)
-                    else:
-                        if len(rider.split('://', 1)) != 2:
-                            rider = 'https://' + rider
-                        try:
-                            urlparse(rider)
-                        except Exception as what:
-                            sys.stderr.write(
-                                "Invalid URI in argument position #{}: {}\n"
-                                .format(i, what))
-                            continue
+            push.update({'title': title,
+                         'body': body})
+            if rider is not None:
+                if os.path.exists(rider):
+                    push_file(rider)
+                else:
+                    if len(rider.split('://', 1)) != 2:
+                        rider = 'https://' + rider
+                    try:
+                        parsed_link = urlparse(rider)
                         push.update({'type': 'link',
                                      'url': rider})
-                else:
-                    push.update({'type': 'note'})
-
-                mkpush(API_KEY, session, **push)
+                    except Exception:
+                        emsg = "Invalid linkspec in argument position #{}\n"
+                        sys.stderr.write(emsg.format(i))
+                        sys.exit(1)
+            pushfuts.append(mkpush(API_KEY, session, **push))
+        final = asyncio.gather(*pushfuts)
+        asyncio.get_event_loop().run_until_complete(final)
+        session.close()
