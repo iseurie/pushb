@@ -5,18 +5,18 @@ import os
 import sys
 import asyncio
 import aiohttp
-import aiofiles
 from json import dumps
-from functools import partial
+import aiofiles
 
 api_root = 'https://api.pushbullet.com/v2/'
 
 
 async def curl_file(session, path, uri):
-    fp = aiofiles.open(path, mode='w')
-    got = await session.get(uri, headers={'Access-Token': API_KEY})
-    await fp.write(await got.read())
-    got.close()
+    fp = await aiofiles.open(path, mode='wb')
+    stream = await session.get(uri, headers={'Access-Token': API_KEY})
+    await fp.write(await stream.read())
+    await fp.flush()
+    stream.close()
 
 
 def __flag(brief: str, full: str) -> bool:
@@ -46,23 +46,23 @@ async def upload_file(api_key, session, path):
                                       'Content-Type': 'application/json'},
                              data=dumps(fields))
     payload = await got.json()
-    uluri = payload.pop('upload_url')
-    fp = aiofiles.open(path, 'rb')
-    (await session.post(uluri, data={fname: fp})).close()
+    (await session.post(payload.pop('upload_url'),
+                        data={'file': open(path, 'rb')})).close()
     return payload
 
 
-async def push_file(api_key, session, path, **kwargs):
+async def push_file(api_key, session, body, path, **kwargs):
     fparams = await upload_file(api_key, session, path)
     fparams['type'] = 'file'
     keys = ('type', 'file_type', 'file_name', 'file_url')
     fparams = {k if k in keys else None: v for (k, v) in fparams.items()}
     del fparams[None]
+    print(fparams)
     await mkpush(api_key, session, **fparams)
 
 
 if __name__ == "__main__":
-    curlp = __flag('-F', '--no-files')
+    curlp = not __flag('-F', '--no-files')
     verbose = __flag('-v', '--verbose')
     stdin_rd = __flag('-', None)
     API_KEY = os.environ.get('PUSHB_API_KEY')
@@ -96,6 +96,8 @@ if __name__ == "__main__":
                      'file': '{file_name}'}
 
         session = None
+        if curlp:
+            curlfuts = []
         for push in pushes:
             push['body'] = push.get('body', '')
             push['title'] = push.get('title', '')
@@ -106,11 +108,10 @@ if __name__ == "__main__":
             if curlp and push['type'] == 'file':
                 if session is None:
                     session = aiohttp.ClientSession()
-                to_curl = (map(lambda x: push[x],
-                               ('file_name', 'file_url')))
-                curlfuts = asyncio.gather(map(partial(curl_file, session),
-                                              *to_curl))
-                asyncio.get_event_loop().run_until_complete(curlfuts)
+                props = tuple([push[x] for x in ('file_name', 'file_url')])
+                curlfuts.append(curl_file(session, *props))
+        looper = asyncio.gather(*curlfuts)
+        asyncio.get_event_loop().run_until_complete(looper)
         if session is not None:
             session.close()
     else:
@@ -137,7 +138,7 @@ if __name__ == "__main__":
                          'body': body})
             if rider is not None:
                 if os.path.exists(rider):
-                    pushfuts.append(push_file(API_KEY, session, rider))
+                    pushfuts.append(push_file(API_KEY, session, body, rider))
                     continue
                 else:
                     if len(rider.split('://', 1)) != 2:
