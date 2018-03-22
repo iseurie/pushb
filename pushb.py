@@ -57,7 +57,6 @@ async def push_file(api_key, session, body, path, **kwargs):
     keys = ('type', 'file_type', 'file_name', 'file_url')
     fparams = {k if k in keys else None: v for (k, v) in fparams.items()}
     del fparams[None]
-    print(fparams)
     await mkpush(api_key, session, **fparams)
 
 
