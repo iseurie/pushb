@@ -20,12 +20,11 @@ async def curl_file(session, path, uri):
 
 
 def __flag(brief: str, full: str) -> bool:
-    do_rm = brief in sys.argv or full in sys.argv
-    if do_rm:
-        rm = brief if brief in sys.argv else full
-        i = sys.argv.index(rm)
-        sys.argv = [sys.argv[i-1]] + sys.argv[i+1:]
-    return do_rm
+    rtn = brief in sys.argv or full in sys.argv
+    for v in brief, full:
+        sys.argv = filter(v.__ne__, sys.argv)
+    sys.argv = list(sys.argv)
+    return rtn
 
 
 async def mkpush(api_key, session, **kwargs):
@@ -53,10 +52,11 @@ async def upload_file(api_key, session, path):
 
 async def push_file(api_key, session, body, path, **kwargs):
     fparams = await upload_file(api_key, session, path)
-    fparams['type'] = 'file'
-    keys = ('type', 'file_type', 'file_name', 'file_url')
-    fparams = {k if k in keys else None: v for (k, v) in fparams.items()}
+    keys = ('title', 'body', 'file_type', 'file_name', 'file_url')
+    fparams = {k if k in keys else None: v
+               for (k, v) in fparams.items()}
     del fparams[None]
+    fparams['type'] = 'file'
     await mkpush(api_key, session, **fparams)
 
 
@@ -70,12 +70,6 @@ if __name__ == "__main__":
         sys.stderr.write("please specify `PUSHB_API_KEY`\n")
         sys.exit(1)
 
-    entries = ' '.join(sys.argv[1:])
-    if stdin_rd:
-        entries += sys.stdin.read()
-    entries = entries.split(',')
-    entries = list(map(str.strip, entries))
-
     try:
         retrieval_limit = int(sys.argv[1])
     except IndexError:
@@ -84,35 +78,50 @@ if __name__ == "__main__":
         retrieval_limit = None
 
     if retrieval_limit is not None:
-        got = requests.get(api_root + 'pushes',
-                           params={'limit': retrieval_limit},
-                           headers={'Access-Token': API_KEY})
+        entries = ' '.join(sys.argv[1:])
+        if stdin_rd:
+            entries += sys.stdin.read()
+        entries = entries.split(',')
+        entries = list(map(str.strip, entries))
+ 
+        cursor = 0
+        while cursor is not None:
+            getparams = {'Access-Token': API_KEY}
+            if cursor != 0:
+                getparams['cursor'] = cursor
+            got = requests.get(api_root + 'pushes',
+                               params=getparams,
+                               headers={'Access-Token': API_KEY})
+            payload = got.json()
+            pushes = payload['pushes']
+            cursor = payload.get('cursor', None)
 
-        pushes = got.json()['pushes']
+            summaries = {'link': '{url}',
+                         'note': '{title}: {body}',
+                         'file': '{file_name}'}
 
-        summaries = {'link': '{url}',
-                     'note': '{title}: {body}',
-                     'file': '{file_name}'}
-
-        session = None
-        if curlp:
+            session = None
             curlfuts = []
-        for push in pushes:
-            push['body'] = push.get('body', '')
-            push['title'] = push.get('title', '')
-            if not verbose:
-                print(summaries[push['type']].format(**push))
-            else:
-                print(dumps(push))
-            if curlp and push['type'] == 'file':
-                if session is None:
-                    session = aiohttp.ClientSession()
-                props = tuple([push[x] for x in ('file_name', 'file_url')])
-                curlfuts.append(curl_file(session, *props))
-        looper = asyncio.gather(*curlfuts)
-        asyncio.get_event_loop().run_until_complete(looper)
-        if session is not None:
-            session.close()
+            for push in pushes:
+                push['body'] = push.get('body', '')
+                push['title'] = push.get('title', '')
+                if not verbose:
+                    print(summaries[push['type']].format(**push))
+                else:
+                    print(dumps(push))
+                if curlp and push['type'] == 'file':
+                    if session is None:
+                        session = aiohttp.ClientSession()
+                    props = tuple([push[x] for x in ('file_name', 'file_url')])
+                    if os.path.exists("./" + props[0]):
+                        sys.stderr.write("{} not downloaded: file exists\n"
+                                         .format(props[0]))
+                        continue
+                    curlfuts.append(curl_file(session, *props))
+            looper = asyncio.gather(*curlfuts)
+            asyncio.get_event_loop().run_until_complete(looper)
+            if session is not None:
+                session.close()
     else:
         from urllib.parse import urlparse
         pushfuts = []
